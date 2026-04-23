@@ -9,8 +9,11 @@ import (
 )
 
 type Querier interface {
+	CreateProduct(ctx context.Context, arg CreateProductParams) (int64, error)
+	DeleteProduct(ctx context.Context, id int64) error
 	FindProductByID(ctx context.Context, id int64) (Product, error)
 	ListProducts(ctx context.Context) ([]Product, error)
+	UpdateProduct(ctx context.Context, arg UpdateProductParams) error
 }
 
 var _ Querier = (*Queries)(nil)
