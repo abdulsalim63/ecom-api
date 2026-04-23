@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:latest
+    container_name: ecom
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123123
+      POSTGRES_DB: ecom
+    ports:
+      - "5434:5432" # Host port 5433 maps to Container port 5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+volumes:
+  postgres_data:
