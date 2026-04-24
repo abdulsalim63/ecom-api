@@ -9,11 +9,38 @@ import (
 )
 
 type Querier interface {
+	// CRUD Carts
+	AddToCart(ctx context.Context, arg AddToCartParams) (int64, error)
+	// Checkout & CRUD Orders
+	// Create order data, migrate checked_out_items to order_items table
+	// Update stock on products table and soft delete item in carts table
+	Checkout(ctx context.Context, arg CheckoutParams) error
 	CreateProduct(ctx context.Context, arg CreateProductParams) (int64, error)
+	CreatePromotion(ctx context.Context, arg CreatePromotionParams) (int64, error)
+	// CRUD Users
+	CreateUser(ctx context.Context, arg CreateUserParams) (int64, error)
 	DeleteProduct(ctx context.Context, id int64) error
+	DeletePromotion(ctx context.Context, id int64) error
+	DeleteUser(ctx context.Context, id int64) error
 	FindProductByID(ctx context.Context, id int64) (Product, error)
+	FindPromotionByID(ctx context.Context, id int64) (Promotion, error)
+	FindUserByID(ctx context.Context, id int64) (User, error)
+	GetOrder(ctx context.Context, id int64) (Order, error)
+	GetOrderItem(ctx context.Context, id int64) (OrderItem, error)
+	ListCartItems(ctx context.Context, arg ListCartItemsParams) ([]Cart, error)
+	ListOrderItems(ctx context.Context, orderID int64) ([]OrderItem, error)
+	ListOrders(ctx context.Context, arg ListOrdersParams) ([]Order, error)
+	// CRUD Products
 	ListProducts(ctx context.Context) ([]Product, error)
+	// CRUD Promotions
+	ListPromotions(ctx context.Context) ([]Promotion, error)
+	ListUsers(ctx context.Context) ([]User, error)
+	RemoveCartItem(ctx context.Context, id int64) error
+	UpdateCartItem(ctx context.Context, arg UpdateCartItemParams) error
+	UpdateOrder(ctx context.Context, arg UpdateOrderParams) error
 	UpdateProduct(ctx context.Context, arg UpdateProductParams) error
+	UpdatePromotion(ctx context.Context, arg UpdatePromotionParams) error
+	UpdateUser(ctx context.Context, arg UpdateUserParams) error
 }
 
 var _ Querier = (*Queries)(nil)

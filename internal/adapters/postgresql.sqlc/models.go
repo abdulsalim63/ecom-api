@@ -5,13 +5,111 @@
 package repo
 
 import (
+	"database/sql/driver"
+	"fmt"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type OrderStatus string
+
+const (
+	OrderStatusPending   OrderStatus = "pending"
+	OrderStatusPaid      OrderStatus = "paid"
+	OrderStatusShipping  OrderStatus = "shipping"
+	OrderStatusReceived  OrderStatus = "received"
+	OrderStatusCompleted OrderStatus = "completed"
+	OrderStatusCancelled OrderStatus = "cancelled"
+)
+
+func (e *OrderStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = OrderStatus(s)
+	case string:
+		*e = OrderStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for OrderStatus: %T", src)
+	}
+	return nil
+}
+
+type NullOrderStatus struct {
+	OrderStatus OrderStatus `json:"order_status"`
+	Valid       bool        `json:"valid"` // Valid is true if OrderStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullOrderStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.OrderStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.OrderStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullOrderStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.OrderStatus), nil
+}
+
+type Cart struct {
+	ID        int64              `json:"id"`
+	UserID    int64              `json:"user_id"`
+	ProductID int64              `json:"product_id"`
+	Quantity  int32              `json:"quantity"`
+	IsDeleted bool               `json:"is_deleted"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Order struct {
+	ID                   int64              `json:"id"`
+	UserID               int64              `json:"user_id"`
+	PromotionID          pgtype.Int8        `json:"promotion_id"`
+	BasePriceInCents     int32              `json:"base_price_in_cents"`
+	TotalDiscountInCents int32              `json:"total_discount_in_cents"`
+	TotalPriceInCents    int32              `json:"total_price_in_cents"`
+	Status               OrderStatus        `json:"status"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+}
+
+type OrderItem struct {
+	ID                           int64              `json:"id"`
+	OrderID                      int64              `json:"order_id"`
+	ProductID                    int64              `json:"product_id"`
+	Quantity                     int32              `json:"quantity"`
+	TotalPricePerCheckoutInCents int32              `json:"total_price_per_checkout_in_cents"`
+	CreatedAt                    pgtype.Timestamptz `json:"created_at"`
+}
 
 type Product struct {
 	ID           int64              `json:"id"`
 	Name         string             `json:"name"`
 	PriceInCents int32              `json:"price_in_cents"`
-	Quantity     int32              `json:"quantity"`
+	Stock        int32              `json:"stock"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type Promotion struct {
+	ID                 int64              `json:"id"`
+	Code               string             `json:"code"`
+	Description        string             `json:"description"`
+	DiscountPercentage int32              `json:"discount_percentage"`
+	StartDate          pgtype.Timestamptz `json:"start_date"`
+	EndDate            pgtype.Timestamptz `json:"end_date"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	IsDeleted          bool               `json:"is_deleted"`
+}
+
+type User struct {
+	ID        int64              `json:"id"`
+	Name      string             `json:"name"`
+	Username  string             `json:"username"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }

@@ -7,10 +7,77 @@ package repo
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addToCart = `-- name: AddToCart :one
+INSERT INTO carts (id, user_id, product_id, quantity, created_at)
+VALUES (nextval('carts_id_seq'), $1, $2, $3, now())
+RETURNING id
+`
+
+type AddToCartParams struct {
+	UserID    int64 `json:"user_id"`
+	ProductID int64 `json:"product_id"`
+	Quantity  int32 `json:"quantity"`
+}
+
+// CRUD Carts
+func (q *Queries) AddToCart(ctx context.Context, arg AddToCartParams) (int64, error) {
+	row := q.db.QueryRow(ctx, addToCart, arg.UserID, arg.ProductID, arg.Quantity)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const checkout = `-- name: Checkout :exec
+WITH checked_out_items AS (
+  SELECT carts.product_id, carts.quantity, products.price_in_cents * carts.quantity AS based_price
+  FROM carts
+  INNER JOIN products ON carts.product_id = products.id
+  WHERE carts.user_id = $1 AND carts.id IN ($2)
+),
+inserted_orders AS (
+  INSERT INTO orders (id, user_id, base_price_in_cents, total_discount_in_cents, total_price_in_cents, status, created_at)
+  SELECT nextval('orders_id_seq'), $1, 
+    SUM(based_price), 
+    $2 * SUM(based_price) / 100, 
+    SUM(based_price) - $2 * SUM(based_price) / 100, 
+    'pending', now()
+  FROM checked_out_items
+),
+inserted_order_items AS (
+  INSERT INTO order_items (id, order_id, product_id, quantity, total_price_per_checkout_in_cents, created_at)
+  SELECT nextval('order_items_id_seq'), inserted_orders.id, checked_out_items.product_id, checked_out_items.quantity, checked_out_items.based_price * $2 / 100, now()
+  FROM checked_out_items, inserted_orders
+),
+updated_carts AS (
+  UPDATE carts
+  SET is_deleted = true, updated_at = now()
+  WHERE id IN ($2)
+)
+UPDATE products
+SET stock = stock - checked_out_items.quantity
+FROM checked_out_items
+WHERE products.id = checked_out_items.product_id
+`
+
+type CheckoutParams struct {
+	UserID int64 `json:"user_id"`
+	ID     int64 `json:"id"`
+}
+
+// Checkout & CRUD Orders
+// Create order data, migrate checked_out_items to order_items table
+// Update stock on products table and soft delete item in carts table
+func (q *Queries) Checkout(ctx context.Context, arg CheckoutParams) error {
+	_, err := q.db.Exec(ctx, checkout, arg.UserID, arg.ID)
+	return err
+}
+
 const createProduct = `-- name: CreateProduct :one
-INSERT INTO products (id, name, price_in_cents, quantity, created_at)
+INSERT INTO products (id, name, price_in_cents, stock, created_at)
 VALUES (nextval('products_id_seq'), $1, $2, $3, now())
 RETURNING id
 `
@@ -18,11 +85,57 @@ RETURNING id
 type CreateProductParams struct {
 	Name         string `json:"name"`
 	PriceInCents int32  `json:"price_in_cents"`
-	Quantity     int32  `json:"quantity"`
+	Stock        int32  `json:"stock"`
 }
 
 func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (int64, error) {
-	row := q.db.QueryRow(ctx, createProduct, arg.Name, arg.PriceInCents, arg.Quantity)
+	row := q.db.QueryRow(ctx, createProduct, arg.Name, arg.PriceInCents, arg.Stock)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const createPromotion = `-- name: CreatePromotion :one
+INSERT INTO promotions (id, code, description, discount_percentage, start_date, end_date, created_at)
+VALUES (nextval('promotions_id_seq'), $1, $2, $3, $4, $5, now())
+RETURNING id
+`
+
+type CreatePromotionParams struct {
+	Code               string             `json:"code"`
+	Description        string             `json:"description"`
+	DiscountPercentage int32              `json:"discount_percentage"`
+	StartDate          pgtype.Timestamptz `json:"start_date"`
+	EndDate            pgtype.Timestamptz `json:"end_date"`
+}
+
+func (q *Queries) CreatePromotion(ctx context.Context, arg CreatePromotionParams) (int64, error) {
+	row := q.db.QueryRow(ctx, createPromotion,
+		arg.Code,
+		arg.Description,
+		arg.DiscountPercentage,
+		arg.StartDate,
+		arg.EndDate,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const createUser = `-- name: CreateUser :one
+INSERT INTO users (id, name, username, created_at)
+VALUES (nextval('users_id_seq'), $1, $2, now())
+RETURNING id
+`
+
+type CreateUserParams struct {
+	Name     string `json:"name"`
+	Username string `json:"username"`
+}
+
+// CRUD Users
+func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (int64, error) {
+	row := q.db.QueryRow(ctx, createUser, arg.Name, arg.Username)
 	var id int64
 	err := row.Scan(&id)
 	return id, err
@@ -38,8 +151,29 @@ func (q *Queries) DeleteProduct(ctx context.Context, id int64) error {
 	return err
 }
 
+const deletePromotion = `-- name: DeletePromotion :exec
+UPDATE promotions
+SET is_deleted = true
+WHERE id = $1
+`
+
+func (q *Queries) DeletePromotion(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deletePromotion, id)
+	return err
+}
+
+const deleteUser = `-- name: DeleteUser :exec
+DELETE FROM users
+WHERE id = $1
+`
+
+func (q *Queries) DeleteUser(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteUser, id)
+	return err
+}
+
 const findProductByID = `-- name: FindProductByID :one
-SELECT id, name, price_in_cents, quantity, created_at FROM products
+SELECT id, name, price_in_cents, stock, created_at FROM products
 WHERE id = $1
 `
 
@@ -50,16 +184,208 @@ func (q *Queries) FindProductByID(ctx context.Context, id int64) (Product, error
 		&i.ID,
 		&i.Name,
 		&i.PriceInCents,
-		&i.Quantity,
+		&i.Stock,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
-const listProducts = `-- name: ListProducts :many
-SELECT id, name, price_in_cents, quantity, created_at FROM products
+const findPromotionByID = `-- name: FindPromotionByID :one
+SELECT id, code, description, discount_percentage, start_date, end_date, created_at, updated_at, is_deleted FROM promotions
+WHERE id = $1
 `
 
+func (q *Queries) FindPromotionByID(ctx context.Context, id int64) (Promotion, error) {
+	row := q.db.QueryRow(ctx, findPromotionByID, id)
+	var i Promotion
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Description,
+		&i.DiscountPercentage,
+		&i.StartDate,
+		&i.EndDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IsDeleted,
+	)
+	return i, err
+}
+
+const findUserByID = `-- name: FindUserByID :one
+SELECT id, name, username, created_at FROM users
+WHERE id = $1
+`
+
+func (q *Queries) FindUserByID(ctx context.Context, id int64) (User, error) {
+	row := q.db.QueryRow(ctx, findUserByID, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Username,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getOrder = `-- name: GetOrder :one
+SELECT id, user_id, promotion_id, base_price_in_cents, total_discount_in_cents, total_price_in_cents, status, created_at FROM orders
+WHERE id = $1
+`
+
+func (q *Queries) GetOrder(ctx context.Context, id int64) (Order, error) {
+	row := q.db.QueryRow(ctx, getOrder, id)
+	var i Order
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.PromotionID,
+		&i.BasePriceInCents,
+		&i.TotalDiscountInCents,
+		&i.TotalPriceInCents,
+		&i.Status,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getOrderItem = `-- name: GetOrderItem :one
+SELECT id, order_id, product_id, quantity, total_price_per_checkout_in_cents, created_at FROM order_items
+WHERE id = $1
+`
+
+func (q *Queries) GetOrderItem(ctx context.Context, id int64) (OrderItem, error) {
+	row := q.db.QueryRow(ctx, getOrderItem, id)
+	var i OrderItem
+	err := row.Scan(
+		&i.ID,
+		&i.OrderID,
+		&i.ProductID,
+		&i.Quantity,
+		&i.TotalPricePerCheckoutInCents,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const listCartItems = `-- name: ListCartItems :many
+SELECT id, user_id, product_id, quantity, is_deleted, created_at, updated_at FROM carts
+WHERE user_id = $1 AND is_deleted = false
+ORDER BY COALESCE(updated_at, created_at) DESC
+LIMIT 10 OFFSET $2
+`
+
+type ListCartItemsParams struct {
+	UserID int64 `json:"user_id"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) ListCartItems(ctx context.Context, arg ListCartItemsParams) ([]Cart, error) {
+	rows, err := q.db.Query(ctx, listCartItems, arg.UserID, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Cart
+	for rows.Next() {
+		var i Cart
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.ProductID,
+			&i.Quantity,
+			&i.IsDeleted,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrderItems = `-- name: ListOrderItems :many
+SELECT id, order_id, product_id, quantity, total_price_per_checkout_in_cents, created_at FROM order_items
+WHERE order_id = $1
+`
+
+func (q *Queries) ListOrderItems(ctx context.Context, orderID int64) ([]OrderItem, error) {
+	rows, err := q.db.Query(ctx, listOrderItems, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrderItem
+	for rows.Next() {
+		var i OrderItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.OrderID,
+			&i.ProductID,
+			&i.Quantity,
+			&i.TotalPricePerCheckoutInCents,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrders = `-- name: ListOrders :many
+SELECT id, user_id, promotion_id, base_price_in_cents, total_discount_in_cents, total_price_in_cents, status, created_at FROM orders
+WHERE user_id = $1 AND ($2 IS NULL OR $2 = '' OR status = $2)
+ORDER BY COALESCE(updated_at, created_at) DESC
+`
+
+type ListOrdersParams struct {
+	UserID  int64       `json:"user_id"`
+	Column2 interface{} `json:"column_2"`
+}
+
+func (q *Queries) ListOrders(ctx context.Context, arg ListOrdersParams) ([]Order, error) {
+	rows, err := q.db.Query(ctx, listOrders, arg.UserID, arg.Column2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Order
+	for rows.Next() {
+		var i Order
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.PromotionID,
+			&i.BasePriceInCents,
+			&i.TotalDiscountInCents,
+			&i.TotalPriceInCents,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProducts = `-- name: ListProducts :many
+SELECT id, name, price_in_cents, stock, created_at FROM products
+`
+
+// CRUD Products
 func (q *Queries) ListProducts(ctx context.Context) ([]Product, error) {
 	rows, err := q.db.Query(ctx, listProducts)
 	if err != nil {
@@ -73,7 +399,7 @@ func (q *Queries) ListProducts(ctx context.Context) ([]Product, error) {
 			&i.ID,
 			&i.Name,
 			&i.PriceInCents,
-			&i.Quantity,
+			&i.Stock,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -86,16 +412,124 @@ func (q *Queries) ListProducts(ctx context.Context) ([]Product, error) {
 	return items, nil
 }
 
+const listPromotions = `-- name: ListPromotions :many
+SELECT id, code, description, discount_percentage, start_date, end_date, created_at, updated_at, is_deleted FROM promotions
+WHERE is_deleted = false
+`
+
+// CRUD Promotions
+func (q *Queries) ListPromotions(ctx context.Context) ([]Promotion, error) {
+	rows, err := q.db.Query(ctx, listPromotions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Promotion
+	for rows.Next() {
+		var i Promotion
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Description,
+			&i.DiscountPercentage,
+			&i.StartDate,
+			&i.EndDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.IsDeleted,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUsers = `-- name: ListUsers :many
+SELECT id, name, username, created_at FROM users
+`
+
+func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.Query(ctx, listUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Username,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const removeCartItem = `-- name: RemoveCartItem :exec
+UPDATE carts
+SET is_deleted = true, updated_at = now()
+WHERE id = $1
+`
+
+func (q *Queries) RemoveCartItem(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, removeCartItem, id)
+	return err
+}
+
+const updateCartItem = `-- name: UpdateCartItem :exec
+UPDATE carts
+SET quantity = $1, updated_at = now()
+WHERE id = $2
+`
+
+type UpdateCartItemParams struct {
+	Quantity int32 `json:"quantity"`
+	ID       int64 `json:"id"`
+}
+
+func (q *Queries) UpdateCartItem(ctx context.Context, arg UpdateCartItemParams) error {
+	_, err := q.db.Exec(ctx, updateCartItem, arg.Quantity, arg.ID)
+	return err
+}
+
+const updateOrder = `-- name: UpdateOrder :exec
+UPDATE orders
+SET status = $1, updated_at = now()
+WHERE id = $2
+`
+
+type UpdateOrderParams struct {
+	Status OrderStatus `json:"status"`
+	ID     int64       `json:"id"`
+}
+
+func (q *Queries) UpdateOrder(ctx context.Context, arg UpdateOrderParams) error {
+	_, err := q.db.Exec(ctx, updateOrder, arg.Status, arg.ID)
+	return err
+}
+
 const updateProduct = `-- name: UpdateProduct :exec
 UPDATE products
-SET name = $1, price_in_cents = $2, quantity = $3
+SET name = $1, price_in_cents = $2, stock = $3
 WHERE id = $4
 `
 
 type UpdateProductParams struct {
 	Name         string `json:"name"`
 	PriceInCents int32  `json:"price_in_cents"`
-	Quantity     int32  `json:"quantity"`
+	Stock        int32  `json:"stock"`
 	ID           int64  `json:"id"`
 }
 
@@ -103,8 +537,51 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) er
 	_, err := q.db.Exec(ctx, updateProduct,
 		arg.Name,
 		arg.PriceInCents,
-		arg.Quantity,
+		arg.Stock,
 		arg.ID,
 	)
+	return err
+}
+
+const updatePromotion = `-- name: UpdatePromotion :exec
+UPDATE promotions
+SET code = $1, description = $2, discount_percentage = $3, start_date = $4, end_date = $5
+WHERE id = $6
+`
+
+type UpdatePromotionParams struct {
+	Code               string             `json:"code"`
+	Description        string             `json:"description"`
+	DiscountPercentage int32              `json:"discount_percentage"`
+	StartDate          pgtype.Timestamptz `json:"start_date"`
+	EndDate            pgtype.Timestamptz `json:"end_date"`
+	ID                 int64              `json:"id"`
+}
+
+func (q *Queries) UpdatePromotion(ctx context.Context, arg UpdatePromotionParams) error {
+	_, err := q.db.Exec(ctx, updatePromotion,
+		arg.Code,
+		arg.Description,
+		arg.DiscountPercentage,
+		arg.StartDate,
+		arg.EndDate,
+		arg.ID,
+	)
+	return err
+}
+
+const updateUser = `-- name: UpdateUser :exec
+UPDATE users
+SET name = $1
+WHERE id = $2
+`
+
+type UpdateUserParams struct {
+	Name string `json:"name"`
+	ID   int64  `json:"id"`
+}
+
+func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) error {
+	_, err := q.db.Exec(ctx, updateUser, arg.Name, arg.ID)
 	return err
 }
