@@ -381,13 +381,85 @@ func (q *Queries) ListOrders(ctx context.Context, arg ListOrdersParams) ([]Order
 	return items, nil
 }
 
-const listProducts = `-- name: ListProducts :many
+const listProductsAdmin = `-- name: ListProductsAdmin :many
 SELECT id, name, price_in_cents, stock, created_at FROM products
+WHERE price_in_cents >= COALESCE($1, price_in_cents)
+  AND price_in_cents <= COALESCE($2, price_in_cents)
+  AND stock >= COALESCE($3, stock)
+  AND stock <= COALESCE($4, stock)
+  AND ($5 IS NULL or $5 = '' OR name ILIKE '%' || $5 || '%')
+LIMIT $6 OFFSET $7
 `
 
+type ListProductsAdminParams struct {
+	PriceInCents   int32  `json:"price_in_cents"`
+	PriceInCents_2 int32  `json:"price_in_cents_2"`
+	Stock          int32  `json:"stock"`
+	Stock_2        int32  `json:"stock_2"`
+	Search         string `json:"column_5"`
+	Limit          int32  `json:"limit"`
+	Offset         int32  `json:"offset"`
+}
+
+func (q *Queries) ListProductsAdmin(ctx context.Context, arg ListProductsAdminParams) ([]Product, error) {
+	rows, err := q.db.Query(ctx, listProductsAdmin,
+		arg.PriceInCents,
+		arg.PriceInCents_2,
+		arg.Stock,
+		arg.Stock_2,
+		arg.Search,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Product
+	for rows.Next() {
+		var i Product
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.PriceInCents,
+			&i.Stock,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProductsCustomer = `-- name: ListProductsCustomer :many
+SELECT id, name, price_in_cents, stock, created_at FROM products
+WHERE price_in_cents >= COALESCE($1, price_in_cents)
+  AND price_in_cents <= COALESCE($2, price_in_cents)
+  AND ($3 IS NULL or $3 = '' OR name ILIKE '%' || $3 || '%')
+LIMIT $4 OFFSET $5
+`
+
+type ListProductsCustomerParams struct {
+	PriceInCents   int32       `json:"price_in_cents"`
+	PriceInCents_2 int32       `json:"price_in_cents_2"`
+	Search         interface{} `json:"column_3"`
+	Limit          int32       `json:"limit"`
+	Offset         int32       `json:"offset"`
+}
+
 // CRUD Products
-func (q *Queries) ListProducts(ctx context.Context) ([]Product, error) {
-	rows, err := q.db.Query(ctx, listProducts)
+func (q *Queries) ListProductsCustomer(ctx context.Context, arg ListProductsCustomerParams) ([]Product, error) {
+	rows, err := q.db.Query(ctx, listProductsCustomer,
+		arg.PriceInCents,
+		arg.PriceInCents_2,
+		arg.Search,
+		arg.Limit,
+		arg.Offset,
+	)
 	if err != nil {
 		return nil, err
 	}

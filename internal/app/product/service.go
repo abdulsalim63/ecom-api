@@ -15,7 +15,29 @@ func NewService(repo product.Repository) product.Service {
 }
 
 func (s *service) Add(ctx context.Context, params product.CreateParams) (int64, error) {
-	return s.repo.Create(ctx, params)
+	// Rule 1 - Product name must unique
+	existedProducts, err := s.repo.ListForAdmin(ctx, product.Filter{
+		Search: params.Name,
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	if existedProducts != nil {
+		return 0, product.ErrExistedProduct
+	}
+
+	// Rule 2 - Price and Stock must be greater than 0
+	if (params.PriceInCent < 0) || (params.Stock < 0) {
+		return 0, product.ErrInvalidPriceOrStock
+	}
+
+	createdId, err := s.repo.Create(ctx, params)
+	if err != nil {
+		return 0, err
+	}
+
+	return createdId, nil
 }
 
 func (s *service) Update(ctx context.Context, params product.UpdateParams) error {

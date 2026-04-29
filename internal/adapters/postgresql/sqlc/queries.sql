@@ -1,6 +1,19 @@
 -- CRUD Products
--- name: ListProducts :many
-SELECT * FROM products;
+-- name: ListProductsCustomer :many
+SELECT * FROM products
+WHERE price_in_cents >= COALESCE($1, price_in_cents)
+  AND price_in_cents <= COALESCE($2, price_in_cents)
+  AND ($3 IS NULL or $3 = '' OR name ILIKE '%' || $3 || '%')
+LIMIT $4 OFFSET $5;
+
+-- name: ListProductsAdmin :many
+SELECT * FROM products
+WHERE price_in_cents >= COALESCE($1, price_in_cents)
+  AND price_in_cents <= COALESCE($2, price_in_cents)
+  AND stock >= COALESCE($3, stock)
+  AND stock <= COALESCE($4, stock)
+  AND ($5 IS NULL or $5 = '' OR name ILIKE '%' || $5 || '%')
+LIMIT $6 OFFSET $7;
 
 -- name: FindProductByID :one
 SELECT * FROM products

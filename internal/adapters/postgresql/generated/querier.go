@@ -30,8 +30,9 @@ type Querier interface {
 	ListCartItems(ctx context.Context, arg ListCartItemsParams) ([]Cart, error)
 	ListOrderItems(ctx context.Context, orderID int64) ([]OrderItem, error)
 	ListOrders(ctx context.Context, arg ListOrdersParams) ([]Order, error)
+	ListProductsAdmin(ctx context.Context, arg ListProductsAdminParams) ([]Product, error)
 	// CRUD Products
-	ListProducts(ctx context.Context) ([]Product, error)
+	ListProductsCustomer(ctx context.Context, arg ListProductsCustomerParams) ([]Product, error)
 	// CRUD Promotions
 	ListPromotions(ctx context.Context) ([]Promotion, error)
 	ListUsers(ctx context.Context) ([]User, error)
